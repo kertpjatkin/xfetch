@@ -32,34 +32,74 @@ const getFromCache = async key => {
   const cacheResult = await redis.get(key);
 
   if (!cacheResult) {
-    return null;
+    return {data: null};
   }
 
-  return JSON.parse(cacheResult);
+  const cacheResultTtl = await redis.ttl(key);
+
+  return {data: JSON.parse(cacheResult), ttl: cacheResultTtl};
 }
 
 const setCacheValue = ({key, value, expirationInSeconds}) => redis.set(
     key, JSON.stringify(value), 'ex', expirationInSeconds
 );
 
+const shouldRecompute = (keyTtlInSeconds) => {
+  // time to recompute value
+  const delta = 0.1;
+  // control 1. favours earlier recomputation < 1 favours later
+  const beta = 2;
+  const random = Math.random();
+  const xfetch = delta * beta * Math.log(random);
+
+  const currentTimestampInSeconds = Math.round(Date.now() / 1000);
+  const cacheExpiresAt = currentTimestampInSeconds + keyTtlInSeconds;
+
+  const isEarlyRecomputeRequired = (currentTimestampInSeconds - xfetch)
+      >= cacheExpiresAt;
+
+  if (isEarlyRecomputeRequired) {
+    console.log("Early recompute is required",
+        {currentTimestampInSeconds, xfetch, cacheExpiresAt});
+  }
+
+  return isEarlyRecomputeRequired;
+}
+
 const getCachedWeather = async city => {
   const cacheKey = `weatherapi:${city}`;
 
-  const cachedResult = await getFromCache(cacheKey);
+  const {data: cachedResult, ttl: cachedResultTtl} = await getFromCache(
+      cacheKey
+  );
 
-  if (cachedResult) {
-    return cachedResult
+  if (!cachedResult) {
+    const weather = await getWeather(city);
+
+    await setCacheValue({
+      key: cacheKey,
+      value: weather,
+      expirationInSeconds: 20
+    });
+
+    return weather;
   }
 
-  const weather = await getWeather(city);
+  const isRecomputeRequired = shouldRecompute(cachedResultTtl);
 
-  await setCacheValue({
-    key: cacheKey,
-    value: weather,
-    expirationInSeconds: 20
-  });
+  if (isRecomputeRequired) {
+    const weather = await getWeather(city);
 
-  return weather;
+    await setCacheValue({
+      key: cacheKey,
+      value: weather,
+      expirationInSeconds: 20
+    });
+
+    return weather;
+  }
+
+  return cachedResult;
 }
 
 app.get('/weather', async (req, res) => {
