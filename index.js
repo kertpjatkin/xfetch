@@ -44,10 +44,10 @@ const setCacheValue = ({key, value, expirationInSeconds}) => redis.set(
     key, JSON.stringify(value), 'ex', expirationInSeconds
 );
 
-const shouldRecompute = (keyTtlInSeconds) => {
+const shouldRecompute = ({lastRecomputeDuration, keyTtlInSeconds}) => {
   // time to recompute value
-  const delta = 0.1;
-  // control 1. favours earlier recomputation < 1 favours later
+  const delta = lastRecomputeDuration;
+  // > 1 favours earlier recomputation, < 1 favours later
   const beta = 2;
   const random = Math.random();
   const xfetch = delta * beta * Math.log(random);
@@ -57,11 +57,6 @@ const shouldRecompute = (keyTtlInSeconds) => {
 
   const isEarlyRecomputeRequired = (currentTimestampInSeconds - xfetch)
       >= cacheExpiresAt;
-
-  if (isEarlyRecomputeRequired) {
-    console.log("Early recompute is required",
-        {currentTimestampInSeconds, xfetch, cacheExpiresAt});
-  }
 
   return isEarlyRecomputeRequired;
 }
@@ -85,7 +80,10 @@ const getCachedWeather = async city => {
     return weather;
   }
 
-  const isRecomputeRequired = shouldRecompute(cachedResultTtl);
+  const isRecomputeRequired = shouldRecompute(
+      {
+        lastRecomputeDuration: 0.1, keyTtlInSeconds: cachedResultTtl
+      });
 
   if (isRecomputeRequired) {
     const weather = await getWeather(city);
